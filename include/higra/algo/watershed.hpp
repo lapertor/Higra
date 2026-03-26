@@ -138,12 +138,16 @@ namespace hg {
 
         array_1d<index_t> sorted_edges_indices = stable_arg_sort(edge_weights);
 
+        auto t0 = std::chrono::high_resolution_clock::now();
+
         index_t num_nodes = num_vertices(graph);
         index_t num_edges = sorted_edges_indices.size();
 
         union_find uf(num_nodes);
 
         array_1d<label_type> labels = vertex_seeds;
+        std::vector<index_t> accepted_edges;
+        accepted_edges.reserve(num_nodes > 0 ? num_nodes - 1 : 0);
 
         for (index_t i = 0; i < num_edges; i++) {
             auto ei = sorted_edges_indices[i];
@@ -158,17 +162,42 @@ namespace hg {
                     labels(c2) = labels(c1);
                 }
                 uf.link(c1, c2);
+                accepted_edges.push_back(ei);
             }
 
+        }
+
+        union_find cc_uf(num_nodes);
+
+        for (auto ei : accepted_edges) {
+            auto e = edge_from_index(ei, graph);
+            auto c1 = cc_uf.find(source(e, graph));
+            auto c2 = cc_uf.find(target(e, graph));
+            if (c1 != c2) {
+                cc_uf.link(c1, c2);
+            }
+        }
+
+
+        array_1d<label_type> final_labels = vertex_seeds;
+
+        for (index_t i = 0; i < num_nodes; i++) {
+            auto ci = cc_uf.find(i);
+            if (final_labels(ci) == background_label && labels(i) != background_label) {
+                final_labels(ci) = labels(i);
+            }
         }
 
         for (index_t i = 0; i < num_nodes; i++) {
-            if (labels(i) == background_label) {
-                labels(i) = labels(uf.find(i));
-            }
+            final_labels(i) = final_labels(cc_uf.find(i));
         }
 
-        return labels;
+        auto t1 = std::chrono::high_resolution_clock::now();
+        std::cerr << "watershed loop: "
+            << std::chrono::duration<double, std::milli>(t1 - t0).count()
+            << " ms" << std::endl;
+
+        return final_labels;
     };
 
 }
