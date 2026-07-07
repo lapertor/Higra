@@ -138,12 +138,21 @@ namespace hg {
 
         array_1d<index_t> sorted_edges_indices = stable_arg_sort(edge_weights);
 
+        auto t0 = std::chrono::high_resolution_clock::now();
+
         index_t num_nodes = num_vertices(graph);
         index_t num_edges = sorted_edges_indices.size();
 
         union_find uf(num_nodes);
 
         array_1d<label_type> labels = vertex_seeds;
+        array_1d<label_type> component_labels = vertex_seeds;
+        array_1d<index_t> component_head = xt::arange<index_t>(num_nodes);
+        array_1d<index_t> component_tail = xt::arange<index_t>(num_nodes);
+        array_1d<index_t> component_next = array_1d<index_t>::from_shape({static_cast<size_t>(num_nodes)});
+
+        index_t invalid = num_nodes;
+        std::fill(component_next.begin(), component_next.end(), invalid);
 
         for (index_t i = 0; i < num_edges; i++) {
             auto ei = sorted_edges_indices[i];
@@ -151,22 +160,57 @@ namespace hg {
             auto c1 = uf.find(source(e, graph));
             auto c2 = uf.find(target(e, graph));
 
-            if (c1 != c2 && (labels(c1) == background_label || labels(c2) == background_label)) {
-                if (labels(c1) == background_label) {
-                    labels(c1) = labels(c2);
-                } else {
-                    labels(c2) = labels(c1);
+            if (c1 == c2) {
+                continue;
+            }
+
+            auto l1 = component_labels(c1);
+            auto l2 = component_labels(c2);
+
+            if (l1 != background_label && l2 != background_label && l1 != l2) {
+                continue;
+            }
+
+            label_type merged_label = l1;
+            if (merged_label == background_label) {
+                merged_label = l2;
+            }
+
+            index_t background_component = invalid;
+            if (l1 == background_label && l2 != background_label) {
+                background_component = c1;
+            } else if (l2 == background_label && l1 != background_label) {
+                background_component = c2;
+            }
+
+            if (background_component != invalid) {
+                auto current = component_head(background_component);
+                while (current != invalid) {
+                    labels(current) = merged_label;
+                    current = component_next(current);
                 }
-                uf.link(c1, c2);
             }
 
+            auto new_root = uf.link(c1, c2);
+            auto old_root = new_root == c1 ? c2 : c1;
+
+            auto new_head = component_head(new_root);
+            auto new_tail = component_tail(new_root);
+            auto old_head = component_head(old_root);
+            auto old_tail = component_tail(old_root);
+
+            component_labels(new_root) = merged_label;
+            component_next(new_tail) = old_head;
+            component_tail(new_root) = old_tail;
+
+            component_head(old_root) = invalid;
+            component_tail(old_root) = invalid;
         }
 
-        for (index_t i = 0; i < num_nodes; i++) {
-            if (labels(i) == background_label) {
-                labels(i) = labels(uf.find(i));
-            }
-        }
+        auto t1 = std::chrono::high_resolution_clock::now();
+        std::cerr << "watershed loop: "
+                << std::chrono::duration<double, std::milli>(t1 - t0).count()
+                << " ms" << std::endl;
 
         return labels;
     };
